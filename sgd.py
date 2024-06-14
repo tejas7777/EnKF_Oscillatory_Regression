@@ -58,7 +58,7 @@ class ModelTrainSGD:
         print(f'Test Loss: {test_loss.item()}')
 
 #Dataset
-data = pd.read_csv('oscillatory_data_small.csv')
+data = pd.read_csv('oscillatory_data.csv')
 X = data[[col for col in data.columns if 'Theta' in col]].values
 y = data[[col for col in data.columns if 'F_Theta' in col]].values
 

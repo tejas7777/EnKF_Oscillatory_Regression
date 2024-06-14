@@ -1,7 +1,7 @@
 import torch
 import copy
 
-class EnKFOptimizer:
+class EnKFOptimizerGradFree:
     def __init__(self, model, lr=1e-3, sigma=0.1, k=10, gamma=1e-3, max_iterations=10, debug_mode=False):
         self.model = model
         self.lr = lr
@@ -14,6 +14,7 @@ class EnKFOptimizer:
         self.shapes = [p.shape for p in self.parameters]  #For keeping track of original shapes
         self.cumulative_sizes = [0] + list(torch.cumsum(torch.tensor([p.numel() for p in self.parameters]), dim=0))
         self.debug_mode = debug_mode
+
 
     def flatten_parameters(self, parameters):
         '''
@@ -35,38 +36,37 @@ class EnKFOptimizer:
     
 
 
-    def step(self, F, D):
+    def step(self, F, D, obs):
         for iteration in range(self.max_iterations):
 
             if self.debug_mode:
                 print(f"iteration {iteration + 1} / {self.max_iterations} : Started")
-            
 
             '''
             Step [1] We will Draw K Particles
             '''
-            self.Omega = torch.randn((self.theta.numel(), self.k)) * self.sigma  #Draw particles
-            particles = self.theta.unsqueeze(1) + self.Omega  #Add the noise to the current parameter estimate
+            self.Omega = torch.randn((self.theta.numel(), self.k)) * self.sigma  # Draw particles
+            particles = self.theta.unsqueeze(1) + self.Omega  # Add the noise to the current parameter estimate
 
             if self.debug_mode:
                 print(f"iteration {iteration + 1} / {self.max_iterations} : Drawing {self.k} Particles completed")
 
             '''
-            Step [2] Now we Evaluate the forward model
+            Step [2] Now we Evaluate the forward model using theta mean
             '''
             current_params_unflattened = self.unflatten_parameters(self.theta)
             F_current = F(current_params_unflattened)
-            Q = torch.zeros(1, self.k)
+            Q = torch.zeros(obs.shape[0], self.k)  # [batch_size, k]
 
             for i in range(self.k):
                 perturbed_params = particles[:, i]
                 perturbed_params_unflattened = self.unflatten_parameters(perturbed_params)
 
-                #Evaluate the forward model on the perturbed parameters
+                # Evaluate the forward model on the perturbed parameters
                 F_perturbed = F(perturbed_params_unflattened)
 
-                #Compute the difference
-                Q[0, i] = (F_perturbed - F_current).mean().item()  #Store mean difference for scalar output
+                # Compute the difference
+                Q[:, i] = F_perturbed.squeeze() - F_current.squeeze()
 
             if self.debug_mode:
                 print(f"iteration {iteration + 1} / {self.max_iterations} : forward model evaluation complete")
@@ -83,37 +83,38 @@ class EnKFOptimizer:
             '''
             Step [4] Calculate the Gradient of loss function with respect to the current parameters
             '''
-            gradient = self.calculate_gradient(F, D)
-            gradient = gradient.view(-1, 1)  #Ensure it's a column vector
+            gradient = self.misfit_gradient(F, self.theta, obs)
+            gradient = gradient.view(-1, 1)  # Ensure it's a column vector
 
             if self.debug_mode:
                 print(f"iteration {iteration + 1} / {self.max_iterations} : gradient calculation completed")
-            
+
             '''
-            Step [5] Update the paramters
+            Step [5] Update the parameters
             '''
 
-            adjustment = H_inv @ Q.T  #Shape [k, m]
-            scaled_adjustment = self.Omega @ adjustment  #Shape [n, m]
-            update = scaled_adjustment * gradient
-            update = update.view(-1)  #Reshape to [n]
+            # print(f"Theta shape: {self.theta.shape}")
+            # print(f"Omega shape: {self.Omega.shape}")
+            # print(f"H_inv shape: {H_inv.shape}")
+            # print(f"Q shape: {Q.shape}")
+            # print(f"Gradient shape: {gradient.shape}")
 
-            #Perform line search to determine optimal learning rate
-            lr = self.simple_line_search(F, D, gradient, scaled_adjustment, self.lr)
+            adjustment = H_inv @ Q.T  # Shape [k, m]
+            scaled_adjustment = self.Omega @ adjustment  # Shape [n, m]
+            update = scaled_adjustment @ gradient  # Shape [n, m] x [m, 1] = [n, 1]
+            update = update.view(-1)  # Reshape to [n]
 
-            self.theta -= lr * update  #Now both are [n]
+            # Perform line search to determine optimal learning rate
+            # lr = self.simple_line_search(F, D, gradient, scaled_adjustment, self.lr)
 
-            #Update the actual model parameters
+            self.theta -= self.lr * update  # Now both are [n]
+
+            # Update the actual model parameters
             self.update_model_parameters(self.theta)
 
             if self.debug_mode:
                 print(f"iteration {iteration + 1} / {self.max_iterations} : parameter update completed")
-
-            # print( f"Sigma={self.sigma}, "
-            # f"Gradient Norm={gradient.norm().item()}, "
-            # f"Parameter Update Norm={update.norm().item()}, "
-            # f"Mean Q Value={Q.mean().item()}, "
-            # f"H Matrix Condition Number={torch.linalg.cond(H_j).item()}")
+               
 
             
 
@@ -151,8 +152,17 @@ class EnKFOptimizer:
 
         return grad
     
-    def gradient_misfit_function(self, F):
-        pass
+    def misfit_gradient(self, F, thetha, d_obs):
+        # Forward pass to get model outputs
+        t = F(self.unflatten_parameters(thetha))
+        
+        # Compute simple residuals
+        residuals = t - d_obs
+
+        return residuals.view(-1, 1)
+
+
+
     
     def calculate_jacobian_and_gradient(self, F, D):
         torch.set_grad_enabled(True)
