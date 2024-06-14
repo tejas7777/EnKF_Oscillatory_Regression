@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from optimiser.enkf import EnKFOptimizer  #Import the EnKF optimizer
 from optimiser.gradient_free_enkf import EnKFOptimizerGradFree
 from model.dnn import DNN
 import pandas as pd
