@@ -7,12 +7,14 @@ from optimiser.enkf import EnKFOptimizer  #Import the EnKF optimizer
 from optimiser.gradient_free_enkf import EnKFOptimizerGradFree
 from model.dnn import DNN
 import pandas as pd
+import os
+import matplotlib.pyplot as plt
 
 class ModelTrainer():
     def __init__(self,model):
         self.model = model
         self.loss_function = nn.MSELoss()
-        self.optimiser = EnKFOptimizerGradFree(model, lr=1e-1, sigma=0.01, k=20, gamma=1e-3, max_iterations=1, debug_mode=False)
+        self.optimiser = EnKFOptimizerGradFree(model, lr=1e-1, sigma=0.01, k=100, gamma=1e-3, max_iterations=1, debug_mode=False)
 
     def load_data(self, data, target, set_standardize = False, test_size=0.2, val_size=0.1):
         # Split data into training and temporary set
@@ -56,19 +58,36 @@ class ModelTrainer():
             return output
 
 
-    def train(self, num_epochs=100):
+    def train(self, num_epochs=100,is_plot_graph = 0):
+        train_losses = []
+        val_losses = []
+
         print("TRAINING STARTED ...")
         for epoch in range(num_epochs):
             self.optimiser.step(F=self.F, D=self.loss_wrapper, obs=self.y_train)
 
-            self.model.eval()
+            #self.model.eval()
             with torch.no_grad():
                 train_output = self.model(self.X_train)
                 train_loss = self.loss_function(train_output, self.y_train)
                 val_output = self.model(self.X_val)
                 val_loss = self.loss_function(val_output, self.y_val)
+                train_losses.append(train_loss.item())
+                val_losses.append(val_loss.item())
 
             print(f'Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss.item()}, Val Loss: {val_loss.item()}')
+
+        if is_plot_graph:
+            self.plot_train_graph(train_losses, val_losses)
+
+    def plot_train_graph(self,train_losses, val_losses):
+        # Plot training and validation loss
+        plt.plot(train_losses, label='Train Loss')
+        plt.plot(val_losses, label='Validation Loss')
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.show()
 
     
     def evaluate(self):
@@ -81,14 +100,24 @@ class ModelTrainer():
     def loss_wrapper(self, model_output):
         return self.loss_function(model_output, self.y_train)
     
+    def save_model(self, filename=None):
+        if filename is None:
+            filename = f'model_enkf.pth'
+        save_path = os.path.join('./saved_models', filename)
+        torch.save(self.model, save_path)
+        print(f'Complete model saved to {save_path}')
+    
 
 #Dataset
-data = pd.read_csv('oscillatory_data_small.csv')
+data = pd.read_csv('oscillatory_data_large.csv')
 X = data[[col for col in data.columns if 'Theta' in col]].values
 y = data[[col for col in data.columns if 'F_Theta' in col]].values
+
+print (y.shape)
 
 
 model_train = ModelTrainer(model=DNN(input_size=X.shape[1], output_size=y.shape[1]))
 model_train.load_data(data=X, target=y)
-model_train.train()
+model_train.train(is_plot_graph=1)
 model_train.evaluate()
+model_train.save_model('model_enkf.pth')

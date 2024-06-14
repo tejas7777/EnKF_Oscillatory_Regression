@@ -127,64 +127,15 @@ class EnKFOptimizerGradFree:
             param.data.copy_(flat_params[idx:idx + num_elements].reshape(param.shape))
             idx += num_elements
 
-
-
-    def calculate_gradient(self, F, loss, epsilon=1e-5):
-        #Initialising here to an empty vector of 0s, dimensions will be similar to thetha
-        grad = torch.zeros_like(self.theta) 
-
-        for i in range(len(self.theta)):
-            original_value = self.theta[i].item()
-
-            #add positively
-            self.theta[i] = original_value + epsilon
-            loss_plus = loss(F(self.unflatten_parameters(self.theta)))
-
-            #add negatively
-            self.theta[i] = original_value - epsilon
-            loss_minus = loss(F(self.unflatten_parameters(self.theta)))
-
-            #Approximate derivative
-            grad[i] = (loss_plus - loss_minus) / (2 * epsilon)
-
-            #Restore original parameter value
-            self.theta[i] = original_value
-
-        return grad
-    
     def misfit_gradient(self, F, thetha, d_obs):
-        # Forward pass to get model outputs
+        #Forward pass to get model outputs
         t = F(self.unflatten_parameters(thetha))
         
-        # Compute simple residuals
+        #compute residuals
         residuals = t - d_obs
 
         return residuals.view(-1, 1)
 
-
-
-    
-    def calculate_jacobian_and_gradient(self, F, D):
-        torch.set_grad_enabled(True)
-
-        current_params_unflattened = self.unflatten_parameters(self.theta)
-
-        def compute_loss(params):
-            output = F(params)  # Make sure F can handle the parameter structure
-            return D(output)
-        
-        params_tensor = torch.cat([p.detach().requires_grad_(True) for p in current_params_unflattened])
-        jacobian_result = torch.autograd.functional.jacobian(compute_loss, (params_tensor,))
-
-        if isinstance(jacobian_result, tuple):
-            jacobian = jacobian_result[0]  #Assuming the first element is the relevant one
-        else:
-            jacobian = jacobian_result
-
-        #Reshape jacobian to ensure it is [n x 1]
-        gradient = jacobian.view(-1, 1)  # Reshape to [n x 1] explicitly
-
-        return gradient
 
     def simple_line_search(self, F, D, gradient, adjustment, initial_lr, reduction_factor=0.5, max_reductions=5):
 
