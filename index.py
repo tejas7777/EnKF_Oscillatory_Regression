@@ -4,18 +4,23 @@ import torch.optim as optim
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from optimiser.gradient_free_enkf import EnKFOptimizerGradFree
+from optimiser.greadient_free_enkf_memory import EnKFOptimizerGradFreeMemory
 from model.dnn import DNN
 import pandas as pd
 import os
 import matplotlib.pyplot as plt
+import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 class ModelTrainer():
-    def __init__(self,model):
+    def __init__(self,model, lr=1e-1, sigma=0.001, k=25, gamma=1e-1, max_iterations=1):
         self.model = model
         self.loss_function = nn.MSELoss()
-        self.optimiser = EnKFOptimizerGradFree(model, lr=1e-1, sigma=0.01, k=100, gamma=1e-3, max_iterations=1, debug_mode=False)
+        self.optimiser = EnKFOptimizerGradFree(model, lr, sigma, k, gamma, max_iterations=1, debug_mode=False)
 
-    def load_data(self, data, target, set_standardize = False, test_size=0.2, val_size=0.1):
+    def load_data(self, data, target, set_standardize = False, test_size=0.2, val_size=0.2):
         # Split data into training and temporary set
         X_train, X_temp, y_train, y_temp = train_test_split(data, target, test_size=test_size + val_size, random_state=42)
 
@@ -37,7 +42,7 @@ class ModelTrainer():
         self.X_test = scaler.transform(self.X_test)
 
     def __convert_data_to_tensor(self):
-        #Convert to PyTorch tensors
+        #Convert to tensors
         self.X_train = torch.tensor(self.X_train, dtype=torch.float32)
         self.X_val = torch.tensor(self.X_val, dtype=torch.float32)
         self.X_test = torch.tensor(self.X_test, dtype=torch.float32)
@@ -57,13 +62,13 @@ class ModelTrainer():
             return output
 
 
-    def train(self, num_epochs=100,is_plot_graph = 0):
+    def train(self, num_epochs=100, is_plot_graph = 0):
         train_losses = []
         val_losses = []
 
         print("TRAINING STARTED ...")
         for epoch in range(num_epochs):
-            self.optimiser.step(F=self.F, D=self.loss_wrapper, obs=self.y_train)
+            self.optimiser.step(F=self.F, obs=self.y_train)
 
             #self.model.eval()
             with torch.no_grad():
@@ -78,6 +83,9 @@ class ModelTrainer():
 
         if is_plot_graph:
             self.plot_train_graph(train_losses, val_losses)
+
+        self.train_loss = train_losses
+        self.val_loss = val_losses
 
     def plot_train_graph(self,train_losses, val_losses):
         # Plot training and validation loss
@@ -95,9 +103,6 @@ class ModelTrainer():
             test_output = self.model(self.X_test)
             test_loss = self.loss_function(test_output, self.y_test)
         print(f'Test Loss: {test_loss.item()}')
-
-    def loss_wrapper(self, model_output):
-        return self.loss_function(model_output, self.y_train)
     
     def save_model(self, filename=None):
         if filename is None:
@@ -105,18 +110,41 @@ class ModelTrainer():
         save_path = os.path.join('./saved_models', filename)
         torch.save(self.model, save_path)
         print(f'Complete model saved to {save_path}')
+
+    def get_ensemble_particles(self):
+        return [self.optimiser.unflatten_parameters(particle) for particle in self.optimiser.particles.T]
+    
+    def plot_ensemble_particles_distribution(self):
+        particles = self.get_ensemble_particles()
+        flattened_particles = [np.concatenate([p.detach().cpu().numpy().flatten() for p in particle]) for particle in particles]
+        
+        num_particles = len(flattened_particles)
+        fig = make_subplots(rows=num_particles, cols=1, subplot_titles=[f'Particle {i+1} Distribution' for i in range(num_particles)])
+        
+        for i, particle in enumerate(flattened_particles):
+            fig.add_trace(
+                go.Histogram(x=particle, nbinsx=50, name=f'Particle {i+1}'),
+                row=i+1, col=1
+            )
+        
+        fig.update_layout(height=300 * num_particles, width=800, title_text="Particle Distributions", showlegend=False)
+        fig.show()
     
 
-#Dataset
-data = pd.read_csv('oscillatory_data_large.csv')
-X = data[[col for col in data.columns if 'Theta' in col]].values
-y = data[[col for col in data.columns if 'F_Theta' in col]].values
+# #Dataset
+# data = pd.read_csv('./dataset/oscillatory_data_large.csv')
+# X = data[[col for col in data.columns if 'Theta' in col]].values
+# y = data[[col for col in data.columns if 'F_Theta' in col]].values
 
-print (y.shape)
+# # # data = pd.read_csv('./dataset/complex_regression_data.csv')
+# # # X = data[[col for col in data.columns if col.startswith('Feature_')]].values
+# # # y = data['Target'].values.reshape(-1, 1)
+
+# print (y.shape)
 
 
-model_train = ModelTrainer(model=DNN(input_size=X.shape[1], output_size=y.shape[1]))
-model_train.load_data(data=X, target=y)
-model_train.train(is_plot_graph=1)
-model_train.evaluate()
-model_train.save_model('model_enkf.pth')
+# model_train = ModelTrainer(model=DNN(input_size=X.shape[1], output_size=y.shape[1]))
+# model_train.load_data(data=X, target=y)
+# model_train.train(is_plot_graph=1)
+# model_train.evaluate()
+# model_train.save_model('model_enkf.pth')

@@ -14,6 +14,7 @@ class EnKFOptimizerGradFree:
         self.shapes = [p.shape for p in self.parameters]  #For keeping track of original shapes
         self.cumulative_sizes = [0] + list(torch.cumsum(torch.tensor([p.numel() for p in self.parameters]), dim=0))
         self.debug_mode = debug_mode
+        self.particles = None
 
 
     def flatten_parameters(self, parameters):
@@ -36,7 +37,7 @@ class EnKFOptimizerGradFree:
     
 
 
-    def step(self, F, D, obs):
+    def step(self, F, obs):
         for iteration in range(self.max_iterations):
 
             if self.debug_mode:
@@ -47,6 +48,7 @@ class EnKFOptimizerGradFree:
             '''
             self.Omega = torch.randn((self.theta.numel(), self.k)) * self.sigma  # Draw particles
             particles = self.theta.unsqueeze(1) + self.Omega  # Add the noise to the current parameter estimate
+            self.particles = particles #This is for retieving
 
             if self.debug_mode:
                 print(f"iteration {iteration + 1} / {self.max_iterations} : Drawing {self.k} Particles completed")
@@ -55,7 +57,9 @@ class EnKFOptimizerGradFree:
             Step [2] Now we Evaluate the forward model using theta mean
             '''
             current_params_unflattened = self.unflatten_parameters(self.theta)
-            F_current = F(current_params_unflattened)
+            with torch.no_grad():
+                F_current = F(current_params_unflattened)
+                
             Q = torch.zeros(obs.shape[0], self.k)  # [batch_size, k]
 
             for i in range(self.k):
@@ -63,7 +67,8 @@ class EnKFOptimizerGradFree:
                 perturbed_params_unflattened = self.unflatten_parameters(perturbed_params)
 
                 # Evaluate the forward model on the perturbed parameters
-                F_perturbed = F(perturbed_params_unflattened)
+                with torch.no_grad():
+                    F_perturbed = F(perturbed_params_unflattened)
 
                 # Compute the difference
                 Q[:, i] = F_perturbed.squeeze() - F_current.squeeze()
@@ -107,7 +112,13 @@ class EnKFOptimizerGradFree:
             # Perform line search to determine optimal learning rate
             # lr = self.simple_line_search(F, D, gradient, scaled_adjustment, self.lr)
 
-            self.theta -= self.lr * update  # Now both are [n]
+            lr = self.simple_line_search(F,update=update,initial_lr=self.lr,obs=obs)
+
+            # lr = self.armijo_line_search(F,update=update,initial_lr=self.lr,obs=obs)
+
+            #print(f"Line Search selected {lr}")
+
+            self.theta -= lr * update  # Now both are [n]
 
             # Update the actual model parameters
             self.update_model_parameters(self.theta)
@@ -131,28 +142,31 @@ class EnKFOptimizerGradFree:
         #Forward pass to get model outputs
         t = F(self.unflatten_parameters(thetha))
         
-        #compute residuals
+        #compute simple residuals
         residuals = t - d_obs
 
         return residuals.view(-1, 1)
 
 
-    def simple_line_search(self, F, D, gradient, adjustment, initial_lr, reduction_factor=0.5, max_reductions=5):
-
+    def simple_line_search(self, F, update, initial_lr, obs, reduction_factor=0.5, max_reductions=5):
         lr = initial_lr
-        current_loss = D(F(self.unflatten_parameters(self.theta)))
+        current_params_unflattened = self.unflatten_parameters(self.theta)
+        
+        # Compute the initial predictions and loss directly
+        current_predictions = F(current_params_unflattened)
+        current_loss = torch.mean((current_predictions - obs) ** 2).item()  # Compute MSE and convert to scalar
 
         for _ in range(max_reductions):
-            new_theta = self.theta - lr * adjustment * gradient
-            new_loss = D(F(self.unflatten_parameters(new_theta)))
+            new_theta = self.theta - lr * update
+            new_predictions = F(self.unflatten_parameters(new_theta))
+            new_loss = torch.mean((new_predictions - obs) ** 2).item()  # Compute MSE and convert to scalar
 
             if new_loss < current_loss:
                 return lr
             
-            lr *= reduction_factor
+            lr -= lr*reduction_factor
 
         return lr
-
 
 
 
