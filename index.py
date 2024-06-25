@@ -5,7 +5,10 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from optimiser.gradient_free_enkf import EnKFOptimizerGradFree
 from optimiser.greadient_free_enkf_memory import EnKFOptimizerGradFreeMemory
+from optimiser.enkf_classification import EnKFOptimizerClassification
+from optimiser.enkf_classification_multiclass import EnKFOptimizerMultiClassification
 from model.dnn import DNN
+from model.dnn_classifier import DNN_Classifier
 import pandas as pd
 import os
 import matplotlib.pyplot as plt
@@ -15,10 +18,12 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 class ModelTrainer():
-    def __init__(self,model, lr=1e-1, sigma=0.001, k=25, gamma=1e-1, max_iterations=1):
+    def __init__(self,model, lr=0.5, sigma=0.001, k=50, gamma=1e-1, max_iterations=1):
         self.model = model
-        self.loss_function = nn.MSELoss()
-        self.optimiser = EnKFOptimizerGradFree(model, lr, sigma, k, gamma, max_iterations=1, debug_mode=False)
+        #self.loss_function = nn.MSELoss()
+        #self.loss_function = nn.BCELoss()
+        self.loss_function = nn.CrossEntropyLoss()
+        self.optimiser = EnKFOptimizerMultiClassification(model, lr, sigma, k, gamma, max_iterations=1, debug_mode=False)
 
     def load_data(self, data, target, set_standardize = False, test_size=0.2, val_size=0.2):
         # Split data into training and temporary set
@@ -43,12 +48,18 @@ class ModelTrainer():
 
     def __convert_data_to_tensor(self):
         #Convert to tensors
+        # self.X_train = torch.tensor(self.X_train, dtype=torch.float32)
+        # self.X_val = torch.tensor(self.X_val, dtype=torch.float32)
+        # self.X_test = torch.tensor(self.X_test, dtype=torch.float32)
+        # self.y_train = torch.tensor(self.y_train, dtype=torch.float32).view(-1, 1)
+        # self.y_val = torch.tensor(self.y_val, dtype=torch.float32).view(-1, 1)
+        # self.y_test = torch.tensor(self.y_test, dtype=torch.float32).view(-1, 1)
         self.X_train = torch.tensor(self.X_train, dtype=torch.float32)
         self.X_val = torch.tensor(self.X_val, dtype=torch.float32)
         self.X_test = torch.tensor(self.X_test, dtype=torch.float32)
-        self.y_train = torch.tensor(self.y_train, dtype=torch.float32).view(-1, 1)
-        self.y_val = torch.tensor(self.y_val, dtype=torch.float32).view(-1, 1)
-        self.y_test = torch.tensor(self.y_test, dtype=torch.float32).view(-1, 1)
+        self.y_train = torch.tensor(self.y_train, dtype=torch.long)  # Convert to long for CrossEntropyLoss
+        self.y_val = torch.tensor(self.y_val, dtype=torch.long)      # Convert to long for CrossEntropyLoss
+        self.y_test = torch.tensor(self.y_test, dtype=torch.long)
 
     def F(self, parameters):
         with torch.no_grad(): 
@@ -62,9 +73,36 @@ class ModelTrainer():
             return output
 
 
-    def train(self, num_epochs=100, is_plot_graph = 0):
+    # def train(self, num_epochs=100, is_plot_graph = 0):
+    #     train_losses = []
+    #     val_losses = []
+
+    #     print("TRAINING STARTED ...")
+    #     for epoch in range(num_epochs):
+    #         self.optimiser.step(F=self.F, obs=self.y_train)
+
+    #         #self.model.eval()
+    #         with torch.no_grad():
+    #             train_output = self.model(self.X_train)
+    #             train_loss = self.loss_function(train_output, self.y_train)
+    #             val_output = self.model(self.X_val)
+    #             val_loss = self.loss_function(val_output, self.y_val)
+    #             train_losses.append(train_loss.item())
+    #             val_losses.append(val_loss.item())
+
+    #         print(f'Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss.item()}, Val Loss: {val_loss.item()}')
+
+    #     if is_plot_graph:
+    #         self.plot_train_graph(train_losses, val_losses)
+
+    #     self.train_loss = train_losses
+    #     self.val_loss = val_losses
+
+    def train(self, num_epochs=500, is_plot_graph = 0):
         train_losses = []
         val_losses = []
+        train_accuracies = []
+        val_accuracies = []
 
         print("TRAINING STARTED ...")
         for epoch in range(num_epochs):
@@ -72,20 +110,37 @@ class ModelTrainer():
 
             #self.model.eval()
             with torch.no_grad():
+                # Calculate train loss
                 train_output = self.model(self.X_train)
                 train_loss = self.loss_function(train_output, self.y_train)
+                train_losses.append(train_loss.item())
+
+                # Calculate validation loss
                 val_output = self.model(self.X_val)
                 val_loss = self.loss_function(val_output, self.y_val)
-                train_losses.append(train_loss.item())
                 val_losses.append(val_loss.item())
 
-            print(f'Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss.item()}, Val Loss: {val_loss.item()}')
+                # Calculate train accuracy
+                _, train_predicted = torch.max(train_output, 1)
+                train_correct = (train_predicted == self.y_train).sum().item()
+                train_accuracy = train_correct / self.y_train.size(0)
+                train_accuracies.append(train_accuracy)
+
+                # Calculate validation accuracy
+                _, val_predicted = torch.max(val_output, 1)
+                val_correct = (val_predicted == self.y_val).sum().item()
+                val_accuracy = val_correct / self.y_val.size(0)
+                val_accuracies.append(val_accuracy)
+
+                print(f'Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss.item()}, Val Loss: {val_loss.item()}, Train Accuracy: {train_accuracy*100:.2f}%, Val Accuracy: {val_accuracy*100:.2f}%')
 
         if is_plot_graph:
             self.plot_train_graph(train_losses, val_losses)
 
         self.train_loss = train_losses
         self.val_loss = val_losses
+        self.train_accuracy = train_accuracies
+        self.val_accuracy = val_accuracies
 
     def plot_train_graph(self,train_losses, val_losses):
         # Plot training and validation loss
@@ -102,7 +157,14 @@ class ModelTrainer():
         with torch.no_grad():
             test_output = self.model(self.X_test)
             test_loss = self.loss_function(test_output, self.y_test)
-        print(f'Test Loss: {test_loss.item()}')
+            # Calculate test accuracy
+            _, test_predicted = torch.max(test_output, 1)
+            test_correct = (test_predicted == self.y_test).sum().item()
+            test_accuracy = test_correct / self.y_test.size(0)
+
+        print(f'Test Loss: {test_loss.item()}, Test Accuracy: {test_accuracy*100:.2f}%')
+
+        #print(f'Test Loss: {test_loss.item()}')
     
     def save_model(self, filename=None):
         if filename is None:
@@ -140,11 +202,21 @@ class ModelTrainer():
 # # # X = data[[col for col in data.columns if col.startswith('Feature_')]].values
 # # # y = data['Target'].values.reshape(-1, 1)
 
-# print (y.shape)
+# # Load the complex binary classification data
+data = pd.read_csv('./dataset/multi_class_classification_data.csv')
+
+#data = pd.read_csv('./dataset/simple_binary_classification_data.csv')
+
+# Extract the feature matrix X and the target vector y
+X = data[[col for col in data.columns if 'Theta' in col]].values
+#y = data['Label'].values.reshape(-1, 1)
+y = data['Label'].values
+
+print (y.shape)
 
 
-# model_train = ModelTrainer(model=DNN(input_size=X.shape[1], output_size=y.shape[1]))
-# model_train.load_data(data=X, target=y)
-# model_train.train(is_plot_graph=1)
-# model_train.evaluate()
-# model_train.save_model('model_enkf.pth')
+model_train = ModelTrainer(model=DNN_Classifier(input_size=X.shape[1], output_size=5))
+model_train.load_data(data=X, target=y)
+model_train.train(is_plot_graph=1)
+model_train.evaluate()
+model_train.save_model('model_enkf.pth')

@@ -1,7 +1,7 @@
 import torch
 import copy
 
-class EnKFOptimizerGradFree:
+class EnKFOptimizerClassification:
     def __init__(self, model, lr=1e-3, sigma=0.1, k=10, gamma=1e-3, max_iterations=10, debug_mode=False):
         self.model = model
         self.lr = lr
@@ -36,7 +36,7 @@ class EnKFOptimizerGradFree:
     
 
 
-    def step(self, F, D, obs):
+    def step(self, F,obs):
         for iteration in range(self.max_iterations):
 
             if self.debug_mode:
@@ -84,7 +84,7 @@ class EnKFOptimizerGradFree:
             Step [4] Calculate the Gradient of loss function with respect to the current parameters
             '''
             gradient = self.misfit_gradient(F, self.theta, obs)
-            gradient = gradient.view(-1, 1)  # Ensure it's a column vector
+            #gradient = gradient.view(-1, 1)  # Ensure it's a column vector
 
             if self.debug_mode:
                 print(f"iteration {iteration + 1} / {self.max_iterations} : gradient calculation completed")
@@ -127,13 +127,17 @@ class EnKFOptimizerGradFree:
             param.data.copy_(flat_params[idx:idx + num_elements].reshape(param.shape))
             idx += num_elements
 
-    def misfit_gradient(self, F, thetha, d_obs):
-        #Forward pass to get model outputs
-        t = F(self.unflatten_parameters(thetha))
+    def misfit_gradient(self, F, theta, d_obs):
+        # Unflatten parameters
+        params_unflattened = self.unflatten_parameters(theta)
         
-        #compute residuals
-        residuals = t - d_obs
-
+        # Forward pass
+        logits = F(params_unflattened)
+        #predictions = torch.sigmoid(logits)
+        
+        # Compute gradient of loss with respect to predictions
+        residuals = logits - d_obs 
+        
         return residuals.view(-1, 1)
 
 

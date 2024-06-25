@@ -7,17 +7,18 @@ import matplotlib.pyplot as plt
 import torch
 import pandas as pd
 from model.dnn import DNN
+from model.dnn_classifier import DNN_Classifier
 from index import ModelTrainer as EnKFModelTrainer
 from adam_train import ModelTrainAdam
 
 def initialize_enkf_trainer(data, target):
-    model = DNN(input_size=data.shape[1], output_size=target.shape[1] if len(target.shape) > 1 else 1)
+    model = DNN_Classifier(input_size=data.shape[1], output_size=target.shape[1] if len(target.shape) > 1 else 1)
     enkf_trainer = EnKFModelTrainer(model, lr=0.5, sigma=0.001, k=50, gamma=1e-1, max_iterations=1)
     enkf_trainer.load_data(data=data, target=target, set_standardize=False)
     return enkf_trainer
 
 def initialize_adam_trainer(data, target):
-    model = DNN(input_size=data.shape[1], output_size=target.shape[1] if len(target.shape) > 1 else 1)
+    model = DNN_Classifier(input_size=data.shape[1], output_size=target.shape[1] if len(target.shape) > 1 else 1)
     adam_trainer = ModelTrainAdam(model)
     adam_trainer.load_data(data=data, target=target, set_standardize=False)
     return adam_trainer
@@ -26,7 +27,7 @@ def compare_validation_losses(data_path):
     # Load dataset
     data = pd.read_csv(data_path)
     X = data[[col for col in data.columns if 'Theta' in col]].values
-    y = data[[col for col in data.columns if 'F_Theta' in col]].values
+    y = data['Label'].values.reshape(-1, 1)
 
     # Initialize trainers
     enkf_trainer = initialize_enkf_trainer(X, y)
@@ -46,5 +47,5 @@ def compare_validation_losses(data_path):
     plt.show()
 
 if __name__ == "__main__":
-    data_path = '../dataset/oscillatory_data_large.csv'
+    data_path = '../dataset/simple_binary_classification_data.csv'
     compare_validation_losses(data_path)

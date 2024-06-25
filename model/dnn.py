@@ -15,3 +15,4 @@ class DNN(nn.Module):
         x = self.relu(x)
         x = self.fc3(x)
         return x
+    
